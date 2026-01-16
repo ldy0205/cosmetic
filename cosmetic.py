@@ -1,48 +1,82 @@
+import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
+import plotly.express as px
+import os
 
-# 1. 데이터 로드 및 확인
-file_name = '대한무역투자진흥공사_4대 소비재 국가별 수출금액 (화장품)_20221231.csv'
-df = pd.read_csv(file_name)
+# 1. 페이지 설정
+st.set_page_config(page_title="농수산물 양허세율 대시보드", layout="wide")
 
-# 2. 데이터 전처리
-# 연도 컬럼 리스트
-years = ['2018', '2019', '2020', '2021', '2022']
+st.title("🌾 국영무역품목 양허세율 분석 서비스")
+st.markdown("---")
 
-# 3. 주요 분석 수행
-# (1) 연도별 총 수출액 계산 (단위: 억 달러로 변환하여 가독성 높임)
-yearly_summary = df[years].sum() / 100_000_000 
+# 2. 파일 자동 찾기 로직 (파일명 에러 방지)
+# 폴더 내 파일들 중 '양허세율'이 포함된 CSV 파일을 자동으로 찾습니다.
+current_files = os.listdir('.')
+target_file = None
 
-# (2) 2022년 기준 상위 10개국 추출
-top_10_2022 = df.nlargest(10, '2022')
+for f in current_files:
+    if "양허세율" in f and f.endswith(".csv"):
+        target_file = f
+        break
 
-# 4. 시각화 설정 (한글 폰트 설정이 필요할 수 있습니다)
-plt.rcParams['font.family'] = 'Malgun Gothic' # 윈도우 기준, 맥은 'AppleGothic'
-plt.rcParams['axes.unicode_minus'] = False
-sns.set_palette("husl")
+@st.cache_data
+def load_and_clean_data(file_path):
+    if not file_path:
+        return None
+    
+    try:
+        # 한국어 인코딩 문제 해결을 위한 시도
+        try:
+            df = pd.read_csv(file_path, encoding='cp949')
+        except:
+            df = pd.read_csv(file_path, encoding='utf-8-sig')
 
-# 그래프 생성
-fig, ax = plt.subplots(2, 1, figsize=(12, 12))
+        # 컬럼명 공백 제거
+        df.columns = df.columns.str.strip()
+        
+        # 숫자 데이터 정제 (콤마 제거 및 형변환)
+        numeric_cols = ['저율관세(추천, %)', '고율종가(미추천)', '종량(미추천, 원/kg)']
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                
+        return df
+    except Exception as e:
+        st.error(f"데이터 정제 중 오류 발생: {e}")
+        return None
 
-# 그래프 1: 연도별 전 세계 총 수출액 추이 (Line Chart)
-sns.lineplot(x=yearly_summary.index, y=yearly_summary.values, marker='s', ax=ax[0], color='navy', linewidth=2)
-ax[0].set_title('연도별 K-뷰티 총 수출액 추이 (2018-2022)', fontsize=15, pad=15)
-ax[0].set_ylabel('수출 금액 (억 달러)')
-ax[0].grid(True, linestyle='--', alpha=0.6)
+# 데이터 로드
+df = load_and_clean_data(target_file)
 
-# 그래프 2: 2022년 수출 상위 10개국 비중 (Bar Chart)
-sns.barplot(data=top_10_2022, x='2022', y='국가명', ax=ax[1])
-ax[1].set_title('2022년 화장품 수출 상위 10개국', fontsize=15, pad=15)
-ax[1].set_xlabel('수출 금액 (USD)')
+# 3. 화면 렌더링
+if df is not None:
+    st.success(f"✅ 성공적으로 파일을 불러왔습니다: `{target_file}`")
+    
+    # 사이드바 필터
+    st.sidebar.header("🔍 필터")
+    items = df['품명'].unique()
+    selected = st.sidebar.multiselect("품목 선택", items, default=items)
+    
+    filtered_df = df[df['품명'].isin(selected)]
 
-plt.tight_layout()
-plt.show()
+    # 그래프 출력
+    st.subheader("📊 관세율 비교 (추천 vs 미추천)")
+    fig = px.bar(
+        filtered_df, 
+        x='품명', 
+        y=['저율관세(추천, %)', '고율종가(미추천)'],
+        barmode='group',
+        labels={'value': '세율 (%)', 'variable': '구분'},
+        color_discrete_map={'저율관세(추천, %)': '#3498db', '고율종가(미추천)': '#e74c3c'},
+        text_auto=True
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-# 5. 분석 결과 리포트 출력
-print("="*50)
-print(f"[{years[-1]}년 분석 요약]")
-print(f"전체 수출 국가 수: {len(df)}개국")
-print(f"최대 수출국: {top_10_2022.iloc[0]['국가명']} ({top_10_2022.iloc[0]['2022']:,} USD)")
-print(f"상위 5개국 집중도: {(top_10_2022.head(5)['2022'].sum() / df['2022'].sum() * 100):.1f}%")
-print("="*50)
+    # 테이블 출력
+    st.subheader("📋 데이터 상세 내역")
+    st.dataframe(filtered_df, use_container_width=True)
+
+else:
+    st.error("❌ 서버에서 CSV 파일을 찾을 수 없습니다.")
+    st.info("GitHub 저장소에 CSV 파일이 업로드되어 있는지 꼭 확인해 주세요!")
+    st.write("현재 서버 내 파일 목록:", current_files)
