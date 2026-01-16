@@ -3,63 +3,90 @@ import pandas as pd
 import plotly.express as px
 import os
 
-# 1. 페이지 제목 설정
-st.set_page_config(page_title="농수산물 양허세율 조회", layout="wide")
-st.title("🌾 국영무역품목 양허세율 데이터 분석")
+# 1. 페이지 설정
+st.set_page_config(page_title="화장품 수출 데이터 분석", layout="wide")
 
-# 2. 파일 자동 찾기 (파일명 직접 입력 안 함 - 에러 방지 핵심)
-def get_data_file():
-    for f in os.listdir('.'):
-        if "양허세율" in f and f.endswith(".csv"):
-            return f
-    return None
+st.title("💄 국가별 화장품 수출 금액 분석 대시보드")
+st.markdown("K-뷰티의 국가별 수출 추이를 연도별(2018-2022)로 분석합니다.")
 
-data_file = get_data_file()
+# 2. 파일 경로 설정 (정확한 파일명)
+data = "대한무역투자진흥공사_4대 소비재 국가별 수출금액 (화장품)_20221231.csv"
 
-# 3. 데이터 로드 함수
 @st.cache_data
 def load_data(file_path):
-    if not file_path:
-        return None
+    # 만약 지정된 파일명이 없으면 폴더 내의 다른 CSV를 자동으로 찾음
+    if not os.path.exists(file_path):
+        all_files = os.listdir('.')
+        csv_files = [f for f in all_files if f.endswith('.csv')]
+        if csv_files:
+            file_path = csv_files[0] # 첫 번째 발견된 CSV 사용
+        else:
+            return None
+
     try:
-        # 다양한 한글 인코딩 방식 순차 시도
-        for enc in ['cp949', 'utf-8-sig', 'euc-kr']:
-            try:
-                df = pd.read_csv(file_path, encoding=enc)
-                # 컬럼명에 있는 공백이나 특수문자 제거
-                df.columns = df.columns.str.strip()
-                return df
-            except:
-                continue
+        # 인코딩 시도 (공공데이터는 보통 cp949)
+        try:
+            df = pd.read_csv(file_path, encoding='cp949')
+        except:
+            df = pd.read_csv(file_path, encoding='utf-8-sig')
+        
+        # 컬럼명 앞뒤 공백 제거
+        df.columns = df.columns.str.strip()
+        
+        # 숫자 데이터 정제: 콤마(,) 제거 및 숫자 변환
+        year_cols = ['2018', '2019', '2020', '2021', '2022']
+        for col in year_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        
+        return df
     except Exception as e:
-        st.error(f"데이터 로딩 실패: {e}")
-    return None
+        st.error(f"데이터 로드 중 오류 발생: {e}")
+        return None
 
-df = load_data(data_file)
+# 데이터 실행
+df = load_data(data)
 
-# 4. 화면 구성
 if df is not None:
-    st.success(f"✅ 파일을 성공적으로 찾았습니다: `{data_file}`")
+    # --- 사이드바 필터 ---
+    st.sidebar.header("🔍 분석 조건")
+    all_countries = sorted(df['국가명'].unique())
+    selected_countries = st.sidebar.multiselect(
+        "국가 선택 (복수 선택 가능)", 
+        all_countries, 
+        default=["중국", "미국", "일본", "베트남"] if "중국" in all_countries else all_countries[:5]
+    )
+
+    # 데이터 필터링
+    filtered_df = df[df['국가명'].isin(selected_countries)]
+
+    # --- 메인 화면 시각화 ---
+    # 1. 연도별 수출 추이 (Line Chart)
+    st.subheader("📈 국가별 수출액 변동 추이 (2018 - 2022)")
     
-    # 숫자 데이터 정제 (콤마 제거 등)
-    for col in ['저율관세(추천, %)', '고율종가(미추천)']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    # 그래프를 그리기 위해 데이터 구조 변경 (Melt)
+    melted_df = filtered_df.melt(id_vars='국가명', value_vars=['2018', '2019', '2020', '2021', '2022'],
+                                 var_name='연도', value_name='수출금액(USD)')
+    
+    fig_line = px.line(melted_df, x='연도', y='수출금액(USD)', color='국가명', markers=True,
+                       title="연도별 수출액 변화")
+    st.plotly_chart(fig_line, use_container_width=True)
 
-    # 사이드바 필터링
-    items = df['품명'].unique()
-    selected = st.sidebar.multiselect("조회할 품목을 선택하세요", items, default=items)
-    filtered_df = df[df['품명'].isin(selected)]
+    # 2. 2022년 기준 수출 규모 비교 (Bar Chart)
+    st.divider()
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.subheader("📊 2022년 수출액 비교")
+        fig_bar = px.bar(filtered_df.sort_values(by='2022', ascending=False), 
+                         x='국가명', y='2022', color='국가명', text_auto=True)
+        st.plotly_chart(fig_bar, use_container_width=True)
+        
+    with col2:
+        st.subheader("📋 선택 국가 상세 데이터")
+        st.dataframe(filtered_df, use_container_width=True)
 
-    # 차트 그리기
-    st.subheader("📊 품목별 세율 비교 (저율 vs 고율)")
-    fig = px.bar(filtered_df, x='품명', y=['저율관세(추천, %)', '고율종가(미추천)'], barmode='group')
-    st.plotly_chart(fig, use_container_width=True)
-
-    # 데이터 표 출력
-    st.subheader("📋 전체 데이터 내역")
-    st.dataframe(filtered_df)
 else:
-    st.error("❌ 서버에서 CSV 파일을 찾을 수 없습니다.")
-    st.info("GitHub 저장소의 첫 화면(Root)에 CSV 파일이 잘 올라와 있는지 확인해 주세요.")
-    st.write("현재 서버 파일 목록:", os.listdir('.'))
+    st.error(f"❌ '{data}' 파일을 찾을 수 없습니다.")
+    st.info("GitHub 저장소의 최상위 폴더에 CSV 파일을 업로드했는지 확인해 주세요.")
+    st.write("현재 서버 내 파일 목록:", os.listdir('.'))
